@@ -5,6 +5,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -25,69 +26,22 @@ func readProgram(filename string) []int {
 	return instrs
 }
 
-func permutations(arr []int) [][]int {
-	var helper func([]int, int)
-	res := [][]int{}
-
-	helper = func(arr []int, n int) {
-		if n == 1 {
-			tmp := make([]int, len(arr))
-			copy(tmp, arr)
-			res = append(res, tmp)
-		} else {
-			for i := 0; i < n; i++ {
-				helper(arr, n-1)
-				if n%2 == 1 {
-					tmp := arr[i]
-					arr[i] = arr[n-1]
-					arr[n-1] = tmp
-				} else {
-					tmp := arr[0]
-					arr[0] = arr[n-1]
-					arr[n-1] = tmp
-				}
-			}
-		}
-	}
-	helper(arr, len(arr))
-	return res
-}
-
 func main() {
 	instrs := readProgram("input.txt")
-	sequences := permutations([]int{9, 8, 7, 6, 5})
-	max := 0
-	for _, sequence := range sequences {
-
-		first := newProgram(1, instrs, make(chan int, 1), make(chan int, 1))
-		var cur *program
-		for i, input := range sequence {
-			if cur == nil {
-				cur = &first
-			} else {
-				p := newProgram(i, instrs, cur.output, make(chan int, 1))
-				cur = &p
-			}
-			go cur.execute()
-			cur.sendInput(input)
-		}
-		res := 0
-		for more := true; more; res, more = cur.getOutput() {
-			first.sendInput(res)
-		}
-		if res > max {
-			max = res
-		}
+	prog := newProgram(1, instrs)
+	err := prog.execute()
+	if err != nil && err != io.EOF {
+		log.Fatalf("BOOM %v\n",err)
 	}
-	fmt.Println(max)
 }
 
-func (p program) execute() error {
-	for  {
+func (p *program) execute() error {
+	for {
 		op, err := p.createOp()
 		if err != nil {
 			return err
 		}
+		//fmt.Println(op)
 		if err := p.runOp(op); err != nil {
 			return err
 		}
@@ -101,6 +55,7 @@ func (p program) getParams(paramCnt int, offset int, lPtrs int) []param {
 		params[i] = param{
 			p.instructions[offset+i],
 			ptr%10 == 0,
+			ptr%10 == 2,
 			0,
 		}
 	}
@@ -129,6 +84,8 @@ func (p program) createOp() (op, error) {
 		paramCnt = 3
 	case EQ:
 		paramCnt = 3
+	case BASE:
+		paramCnt = 1
 	case EXIT:
 	default:
 		return op{}, fmt.Errorf("Unsupported OpCode: %d\n", opCode)
@@ -140,7 +97,7 @@ func (p program) createOp() (op, error) {
 	}, nil
 }
 
-func (p program) runOp(o op) error {
+func (p *program) runOp(o op) error {
 	switch o.action {
 	case ADD:
 		return p.arithmatic(func(a, b int) int { return a + b }, o)
@@ -158,8 +115,9 @@ func (p program) runOp(o op) error {
 		return p.comparison(func(a, b int) bool { return a < b }, o)
 	case EQ:
 		return p.comparison(func(a, b int) bool { return a == b }, o)
+	case BASE:
+		return p.moveBase(o)
 	case EXIT:
-		close(p.output)
 		return io.EOF
 	}
 	return nil
@@ -170,27 +128,18 @@ func (p *program) arithmatic(f func(int, int) int, o op) error {
 		return fmt.Errorf("not enough params")
 	}
 	var err error
-	p1 := &o.params[0]
-	p1.reg = p1.value
-	if p1.isPtr {
-		p1.reg, err = p.readMemory(p1.value)
-		if err != nil {
-			return fmt.Errorf("Arithmatic: Unable to read param 1 from memory %v\n", err)
-		}
-	}
-	p2 := &o.params[1]
-	p2.reg = p2.value
-	if p2.isPtr {
-		p2.reg, err = p.readMemory(p2.value)
-		if err != nil {
-			return fmt.Errorf("Arithmatic: Unable to read param 2 from memory %v\n", err)
-		}
-	}
-	res := &o.params[2]
-	res.reg = f(p1.reg, p2.reg)
-	err = p.writeMemory(res.reg, res.value)
+	p1, err := p.getValue(&o.params[0])
 	if err != nil {
-		return fmt.Errorf("Arithmatic: Unable to write param to memory %v\n", err)
+		return err
+	}
+	p2, err := p.getValue(&o.params[1])
+	if err != nil {
+		return err
+	}
+	res := f(p1, p2)
+	p.setValue(&o.params[2], res)
+	if err != nil {
+		return err
 	}
 	p.instPtr += 4
 	return nil
@@ -201,30 +150,21 @@ func (p *program) comparison(f func(int, int) bool, o op) error {
 		return fmt.Errorf("not enough params")
 	}
 	var err error
-	p1 := &o.params[0]
-	p1.reg = p1.value
-	if p1.isPtr {
-		p1.reg, err = p.readMemory(p1.value)
-		if err != nil {
-			return fmt.Errorf("Comparison: Unable to read param 1 from memory %v\n", err)
-		}
-	}
-	p2 := &o.params[1]
-	p2.reg = p2.value
-	if p2.isPtr {
-		p2.reg, err = p.readMemory(p2.value)
-		if err != nil {
-			return fmt.Errorf("Comparison: Unable to read param 2 from memory %v\n", err)
-		}
-	}
-	res := &o.params[2]
-	res.reg = 0
-	if f(p1.reg, p2.reg) {
-		res.reg = 1
-	}
-	err = p.writeMemory(res.reg, res.value)
+	p1, err := p.getValue(&o.params[0])
 	if err != nil {
-		return fmt.Errorf("Comparison: Unable to write param to memory %v\n", err)
+		return err
+	}
+	p2, err := p.getValue(&o.params[1])
+	if err != nil {
+		return err
+	}
+	res := 0
+	if f(p1, p2) {
+		res = 1
+	}
+	err = p.setValue(&o.params[2],res)
+	if err != nil {
+		return err
 	}
 	p.instPtr += 4
 	return nil
@@ -234,11 +174,14 @@ func (p *program) scan(o op) error {
 	if len(o.params) != 1 {
 		return fmt.Errorf("not enough params")
 	}
-	res := <-p.input
-	fmt.Printf("mInput: %d\n",res)
-	err := p.writeMemory(res, o.params[0].value)
+	var res int
+	_, err := fmt.Fscanf(p.input, "%d\n", &res)
 	if err != nil {
-		return fmt.Errorf("Scan: Unable to write param to memory %v\n", err)
+		return err
+	}
+	err = p.setValue(&o.params[0],res)
+	if err != nil {
+		return err
 	}
 	p.instPtr += 2
 	return nil
@@ -249,16 +192,11 @@ func (p *program) print(o op) error {
 		return fmt.Errorf("not enough params")
 	}
 	var err error
-	p1 := &o.params[0]
-	p1.reg = p1.value
-	if p1.isPtr {
-		p1.reg, err = p.readMemory(p1.value)
-		if err != nil {
-			return fmt.Errorf("Print: Unable to read param 1 from memory %v\n", err)
-		}
+	val, err := p.getValue(&o.params[0])
+	if err != nil {
+		return err
 	}
-	p.output <- o.params[0].reg
-	fmt.Printf("mOutput: %d\n",o.params[0].reg)
+	fmt.Fprintf(p.output,"%d\n",val)
 	p.instPtr += 2
 	return nil
 }
@@ -268,68 +206,104 @@ func (p *program) jump(f func(int) bool, o op) error {
 		return fmt.Errorf("not enough params")
 	}
 	var err error
-	p1 := &o.params[0]
-	p1.reg = p1.value
-	if p1.isPtr {
-		p1.reg, err = p.readMemory(p1.value)
-		if err != nil {
-			return fmt.Errorf("Jump: Unable to read param 1 from memory %v\n", err)
-		}
+	val, err := p.getValue(&o.params[0])
+	if err != nil {
+		return err
 	}
-	if f(p1.reg) {
-		p2 := &o.params[1]
-		p2.reg = p2.value
-		if p2.isPtr {
-			p2.reg, err = p.readMemory(p2.value)
-			if err != nil {
-				return fmt.Errorf("Jump: Unable to read param 2 from memory %v\n", err)
-			}
+	if f(val) {
+		val, err = p.getValue(&o.params[1])
+		if err != nil {
+			return err
 		}
-		p.instPtr = p2.reg
+		p.instPtr = val
 	} else {
 		p.instPtr += 3
 	}
 	return nil
 }
 
-func (p program) getOutput() (int, bool) {
-	out, ok := <-p.output
-	fmt.Printf("Output: %d\n", out)
-	return out, ok
+func (p *program) moveBase(o op) error {
+	if len(o.params) != 1 {
+		return fmt.Errorf("not enough params")
+	}
+	val, err := p.getValue(&o.params[0])
+	if err != nil {
+		return err
+	}
+	p.relativeBase += val
+	p.instPtr += 2
+	return nil
+}
+
+func (p program) getOutput() (int, error) {
+	var ret int
+	_, err := fmt.Fscanf(p.output, "%d", &ret)
+	if err != nil {
+		return 0, err
+	}
+	fmt.Printf("Output: %d\n", ret)
+	return ret, nil
 }
 
 func (p program) sendInput(in int) {
 	fmt.Printf("Input: %d\n", in)
-	p.input <- in
+	fmt.Fprintf(p.input, "%d",in)
+}
+
+func (p program) getValue(p1 *param) (int, error){
+	p1.reg = p1.value
+	var err error
+	if p1.isRel {
+		p1.value = p1.value + p.relativeBase
+		p1.isPtr = true;
+	}
+	if p1.isPtr {
+		p1.reg, err = p.readMemory(p1.value)
+		if err != nil {
+			return 0, fmt.Errorf("Unable to read param %v from memory %v\n", p1, err)
+		}
+	}
+	return p1.reg, nil
 }
 
 func (p program) readMemory(memoryAddress int) (int, error) {
-	if memoryAddress >= len(p.instructions) {
-		return 0, fmt.Errorf("invalid memory address %d", memoryAddress)
+	if memoryAddress < len(p.instructions) && memoryAddress >= 0 {
+		return p.instructions[memoryAddress], nil
 	}
-	res := p.instructions[memoryAddress]
-	return res, nil
+	return 0, fmt.Errorf("invalid memory address %d", memoryAddress)
 }
 
-func (p program) writeMemory(value int, memoryAddress int) error {
-	if memoryAddress >= len(p.instructions) {
-		return fmt.Errorf("invalid memory address %d", memoryAddress)
+func (p program) setValue(p1 *param, val int) error {
+	p1.reg = val
+	if p1.isRel {
+		p1.value = p1.value + p.relativeBase
+		p1.isPtr = true;
 	}
-	p.instructions[memoryAddress] = value
+	err := p.writeMemory(p1.reg, p1.value)
+	if err != nil {
+		return fmt.Errorf("Unable to write param %v to memory %v\n", p, err)
+	}
 	return nil
 }
 
-func (p program) exit() {
-	close(p.input)
+func (p program) writeMemory(value int, memoryAddress int) error {
+	if memoryAddress < len(p.instructions) && memoryAddress >= 0 {
+		p.instructions[memoryAddress] = value
+		return nil
+	}
+	return fmt.Errorf("invalid memory address %d", memoryAddress)
 }
 
-func newProgram(id int, instructions []int, input, output chan int) program {
+func newProgram(id int, instructions []int) program {
+	inp := os.Stdin//bytes.NewBuffer(make([]byte,100))
+	out := os.Stdout//bytes.NewBuffer(make([]byte,100))
 	p := program{
 		id,
-		input,
-		output,
+		inp,
+		out,
 		0,
-		make([]int, len(instructions)),
+		0,
+		make([]int, len(instructions) * 10),
 	}
 	copy(p.instructions, instructions)
 	return p
@@ -337,9 +311,10 @@ func newProgram(id int, instructions []int, input, output chan int) program {
 
 type program struct {
 	id           int
-	input        chan int
-	output       chan int
+	input        io.ReadWriter
+	output       io.ReadWriter
 	instPtr      int
+	relativeBase int
 	instructions []int
 }
 
@@ -362,6 +337,8 @@ func (o op) String() string {
 		ret = "LESS THAN "
 	case EQ:
 		ret = "EQUALS "
+	case BASE:
+		ret = "BASE "
 	case EXIT:
 		ret = "EXIT"
 	}
@@ -389,6 +366,7 @@ func (p param) String() string {
 type param struct {
 	value int
 	isPtr bool
+	isRel bool
 	reg   int
 }
 
@@ -402,5 +380,6 @@ const (
 	JUMPF int = 6
 	LT    int = 7
 	EQ    int = 8
+	BASE  int = 9
 	EXIT  int = 99
 )
