@@ -83,7 +83,7 @@ func main() {
 }
 
 func (p program) execute() error {
-	for  {
+	for {
 		op, err := p.createOp()
 		if err != nil {
 			return err
@@ -235,7 +235,7 @@ func (p *program) scan(o op) error {
 		return fmt.Errorf("not enough params")
 	}
 	res := <-p.input
-	fmt.Printf("mInput: %d\n",res)
+	fmt.Printf("mInput: %d\n", res)
 	err := p.writeMemory(res, o.params[0].value)
 	if err != nil {
 		return fmt.Errorf("Scan: Unable to write param to memory %v\n", err)
@@ -258,7 +258,7 @@ func (p *program) print(o op) error {
 		}
 	}
 	p.output <- o.params[0].reg
-	fmt.Printf("mOutput: %d\n",o.params[0].reg)
+	fmt.Printf("mOutput: %d\n", o.params[0].reg)
 	p.instPtr += 2
 	return nil
 }

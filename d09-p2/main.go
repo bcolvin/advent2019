@@ -31,7 +31,7 @@ func main() {
 	prog := newProgram(1, instrs)
 	err := prog.execute()
 	if err != nil && err != io.EOF {
-		log.Fatalf("BOOM %v\n",err)
+		log.Fatalf("BOOM %v\n", err)
 	}
 }
 
@@ -162,7 +162,7 @@ func (p *program) comparison(f func(int, int) bool, o op) error {
 	if f(p1, p2) {
 		res = 1
 	}
-	err = p.setValue(&o.params[2],res)
+	err = p.setValue(&o.params[2], res)
 	if err != nil {
 		return err
 	}
@@ -179,7 +179,7 @@ func (p *program) scan(o op) error {
 	if err != nil {
 		return err
 	}
-	err = p.setValue(&o.params[0],res)
+	err = p.setValue(&o.params[0], res)
 	if err != nil {
 		return err
 	}
@@ -196,7 +196,7 @@ func (p *program) print(o op) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(p.output,"%d\n",val)
+	fmt.Fprintf(p.output, "%d\n", val)
 	p.instPtr += 2
 	return nil
 }
@@ -247,15 +247,15 @@ func (p program) getOutput() (int, error) {
 
 func (p program) sendInput(in int) {
 	fmt.Printf("Input: %d\n", in)
-	fmt.Fprintf(p.input, "%d",in)
+	fmt.Fprintf(p.input, "%d", in)
 }
 
-func (p program) getValue(p1 *param) (int, error){
+func (p program) getValue(p1 *param) (int, error) {
 	p1.reg = p1.value
 	var err error
 	if p1.isRel {
 		p1.value = p1.value + p.relativeBase
-		p1.isPtr = true;
+		p1.isPtr = true
 	}
 	if p1.isPtr {
 		p1.reg, err = p.readMemory(p1.value)
@@ -277,7 +277,7 @@ func (p program) setValue(p1 *param, val int) error {
 	p1.reg = val
 	if p1.isRel {
 		p1.value = p1.value + p.relativeBase
-		p1.isPtr = true;
+		p1.isPtr = true
 	}
 	err := p.writeMemory(p1.reg, p1.value)
 	if err != nil {
@@ -295,15 +295,15 @@ func (p program) writeMemory(value int, memoryAddress int) error {
 }
 
 func newProgram(id int, instructions []int) program {
-	inp := os.Stdin//bytes.NewBuffer(make([]byte,100))
-	out := os.Stdout//bytes.NewBuffer(make([]byte,100))
+	inp := os.Stdin  //bytes.NewBuffer(make([]byte,100))
+	out := os.Stdout //bytes.NewBuffer(make([]byte,100))
 	p := program{
 		id,
 		inp,
 		out,
 		0,
 		0,
-		make([]int, len(instructions) * 10),
+		make([]int, len(instructions)*10),
 	}
 	copy(p.instructions, instructions)
 	return p
